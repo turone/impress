@@ -15,7 +15,7 @@ const { Planner } = require('./lib/planner.js');
 const CONFIG_SECTIONS = ['log', 'scale', 'server', 'sessions'];
 const PATH = process.cwd();
 const WORKER_PATH = path.join(__dirname, 'lib/worker.js');
-const REPORTER_PATH = path.join(__dirname, 'lib/reporter.js');
+const REPORTER_PATH = 'file://' + path.join(__dirname, 'lib/reporter.js');
 const LOG_PATH = path.join(PATH, 'log');
 const CTRL_C = 3;
 const LOG_OPTIONS = { path: LOG_PATH, home: PATH, workerId: 0 };
@@ -52,6 +52,12 @@ const logError = (type) => (err) => {
   if (impress.initialization) exit('Can not start Application server', 1);
 };
 
+const broadcast = (app, data) => {
+  for (const thread of app.threads.values()) {
+    thread.postMessage(data);
+  }
+};
+
 const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
   const workerData = { id, kind, root: app.root, path: app.path, port };
   const execArgv = [...process.execArgv, `--test-reporter=${REPORTER_PATH}`];
@@ -81,6 +87,7 @@ const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
         clearTimeout(impress.startTimer);
         impress.initialization = false;
         impress.console.info(`App started: ${app.path}`);
+        broadcast(app, { name: 'ready' });
       }
     },
 
@@ -178,13 +185,6 @@ const loadApplications = async () => {
   }
 };
 
-const stopApplication = (dir) => {
-  const app = impress.applications.get(dir);
-  for (const thread of app.threads.values()) {
-    thread.postMessage({ name: 'stop' });
-  }
-};
-
 const stop = async (code = 0) => {
   const portsClosed = new Promise((resolve) => {
     impress.console.info('Graceful shutdown in worker 0');
@@ -198,7 +198,7 @@ const stop = async (code = 0) => {
     };
   });
   for (const app of impress.applications.values()) {
-    stopApplication(app.path);
+    broadcast(app, { name: 'stop' });
   }
   await portsClosed;
   exit('Application server stopped', code);
