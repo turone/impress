@@ -1,7 +1,7 @@
 ({
   host: 'string',
   balancer: '?number',
-  protocol: { enum: ['http', 'https'] },
+  protocol: { enum: ['http', 'https', 'http2'] },
   ports: { array: 'number' },
   nagle: 'boolean',
   timeouts: {
