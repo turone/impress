@@ -3,6 +3,7 @@
   balancer: '?number',
   protocol: { enum: ['http', 'https', 'http2'] },
   ports: { array: 'number' },
+  apiUri: 'string',
   nagle: 'boolean',
   timeouts: {
     bind: 'number',
