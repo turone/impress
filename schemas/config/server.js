@@ -3,7 +3,13 @@
   balancer: '?number',
   protocol: { enum: ['http', 'https', 'http2'] },
   ports: { array: 'number' },
-  apiUri: 'string',
+  'apiUri?': 'string',
+  'static?': {
+    'ext?': { array: 'string' },
+    'disabledVirtualFolders?': 'boolean',
+    'folders?': { array: 'string' },
+    'rootFiles?': { array: 'string' },
+  },
   nagle: 'boolean',
   timeouts: {
     bind: 'number',
