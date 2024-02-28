@@ -10,12 +10,12 @@ metatests.testAsync('lib/procedure', async (test) => {
   });
 
   const application = {
-    server: {
-      semaphore: {
-        async enter() {},
-        leave() {},
-      },
+    Error,
+    semaphore: {
+      async enter() {},
+      leave() {},
     },
+    config: { server: { timeouts: {} } },
   };
 
   const procedure = new Procedure(script, 'method', application);
@@ -62,12 +62,11 @@ metatests.testAsync('lib/procedure validate', async (test) => {
 
   const application = {
     Error,
-    server: {
-      semaphore: {
-        async enter() {},
-        leave() {},
-      },
+    semaphore: {
+      async enter() {},
+      leave() {},
     },
+    config: { server: { timeouts: {} } },
   };
   const procedure = new Procedure(script, 'method', application);
 
@@ -93,12 +92,11 @@ metatests.testAsync('lib/procedure validate async', async (test) => {
 
   const application = {
     Error,
-    server: {
-      semaphore: {
-        async enter() {},
-        leave() {},
-      },
+    semaphore: {
+      async enter() {},
+      leave() {},
     },
+    config: { server: { timeouts: {} } },
   };
   const procedure = new Procedure(script, 'method', application);
 
@@ -124,12 +122,11 @@ metatests.testAsync('lib/procedure timeout', async (test) => {
 
   const application = {
     Error,
-    server: {
-      semaphore: {
-        async enter() {},
-        leave() {},
-      },
+    semaphore: {
+      async enter() {},
+      leave() {},
     },
+    config: { server: { timeouts: { request: 20 } } },
   };
 
   const procedure = new Procedure(script, 'method', application);
@@ -140,4 +137,103 @@ metatests.testAsync('lib/procedure timeout', async (test) => {
   );
 
   await test.resolves(() => procedure.invoke({}, { waitTime: 50 }), DONE);
+});
+
+metatests.testAsync('lib/procedure queue', async (test) => {
+  const DONE = 'success';
+
+  const script = () => ({
+    queue: {
+      concurrency: 1,
+      size: 1,
+      timeout: 15,
+    },
+
+    method: async ({ waitTime }) =>
+      new Promise((resolve) => {
+        setTimeout(() => resolve(DONE), waitTime);
+      }),
+  });
+
+  const application = {
+    Error,
+    semaphore: {
+      async enter() {},
+      leave() {},
+    },
+    config: { server: { timeouts: {} } },
+  };
+
+  const rpc = async (proc, args) => {
+    let result = null;
+    await proc.enter();
+    try {
+      result = await proc.invoke({}, args);
+    } catch (error) {
+      throw new Error('Procedure.invoke failed. Check your script.method');
+    }
+    proc.leave();
+    return result;
+  };
+
+  const procedure = new Procedure(script, 'method', application);
+
+  await test.resolves(async () => {
+    const invokes = await Promise.allSettled([
+      rpc(procedure, { waitTime: 2 }),
+      rpc(procedure, { waitTime: 1 }),
+    ]);
+    const last = invokes[1];
+    return last.value;
+  }, DONE);
+
+  await test.rejects(async () => {
+    const invokes = await Promise.allSettled([
+      rpc(procedure, { waitTime: 16 }),
+      rpc(procedure, { waitTime: 1 }),
+    ]);
+    const last = invokes[1];
+    if (last.status === 'rejected') throw last.reason;
+    return last.value;
+  }, new Error('Semaphore timeout'));
+
+  await test.rejects(async () => {
+    const invokes = await Promise.allSettled([
+      rpc(procedure, { waitTime: 1 }),
+      rpc(procedure, { waitTime: 1 }),
+      rpc(procedure, { waitTime: 1 }),
+    ]);
+    const last = invokes[2];
+    if (last.status === 'rejected') throw last.reason;
+    return last.value;
+  }, new Error('Semaphore queue is full'));
+});
+
+metatests.testAsync('lib/procedure global timeouts.request', async (test) => {
+  const DONE = 'success';
+
+  const script = () => ({
+    timeout: undefined,
+
+    method: async ({ waitTime }) =>
+      new Promise((resolve) => {
+        setTimeout(() => resolve(DONE), waitTime);
+      }),
+  });
+
+  const application = {
+    Error,
+    semaphore: {
+      async enter() {},
+      leave() {},
+    },
+    config: { server: { timeouts: { request: 10 } } },
+  };
+
+  const procedure = new Procedure(script, 'method', application);
+
+  await test.rejects(
+    async () => procedure.invoke({}, { waitTime: 20 }),
+    new Error('Timeout of 10ms reached'),
+  );
 });
