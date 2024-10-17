@@ -66,7 +66,7 @@
     "node": "^18.15 || 20 || 21"
   },
   "dependencies": {
-    "metacom": "file:../metacom",
+    "metacom": "turone/metacom",
     "metaconfiguration": "^3.0.0",
     "metalog": "^3.1.14",
     "metaschema": "^2.1.5",
