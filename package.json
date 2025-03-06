@@ -63,13 +63,13 @@
     "fmt": "prettier --write \"**/*.js\" \"**/*.json\" \"**/*.md\" \"**/*.ts\""
   },
   "engines": {
-    "node": "^18.15 || 20 || 21 || 22"
+    "node": "^18.15 || 20 || 21 || 22 || 23"
   },
   "dependencies": {
     "metacom": "turone/metacom",
     "metaconfiguration": "^3.0.0",
     "metalog": "^3.1.14",
-    "metaschema": "^2.1.5",
+    "metaschema": "turone/metaschema",
     "metautil": "^5.2.1",
     "metavm": "^1.4.1",
     "metawatch": "^1.2.1"
