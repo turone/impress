@@ -11,6 +11,7 @@ const { Pool, isError } = require('metautil');
 const { loadSchema } = require('metaschema');
 const { Logger } = require('metalog');
 const { Planner } = require('./lib/planner.js');
+const { SharedCache } = require('./lib/cache/SharedCache.js');
 
 const CONFIG_SECTIONS = ['log', 'scale', 'server', 'sessions'];
 const PATH = process.cwd();
@@ -59,7 +60,11 @@ const broadcast = (app, data) => {
 };
 
 const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
-  const workerData = { id, kind, root: app.root, path: app.path, port };
+  const sc = app.sharedCache;
+  const sharedCache = sc ? sc.snapshot() : null;
+  const workerData = {
+    id, kind, root: app.root, path: app.path, port, sharedCache,
+  };
   const execArgv = [...process.execArgv, `--test-reporter=${REPORTER_PATH}`];
   const options = { trackUnmanagedFds: true, workerData, execArgv };
   const worker = new Worker(WORKER_PATH, options);
@@ -74,6 +79,7 @@ const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
   });
 
   worker.on('exit', (code) => {
+    if (app.sharedCache) app.sharedCache.handleWorkerExit(id);
     if (code !== 0) startWorker(app, kind, port, id);
     else app.threads.delete(id);
     if (impress.initialization) exit('Can not start Application server', 1);
@@ -128,6 +134,10 @@ const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
     terminate: ({ code }) => {
       process.emit('TERMINATE', code);
     },
+
+    'ack-update': ({ updateId }) => {
+      if (sc) sc.handleAck(updateId, id);
+    },
   };
 
   worker.on('message', (msg) => {
@@ -153,6 +163,8 @@ const validateConfig = async (config) => {
   if (!valid) exit('Application server configuration is invalid', 1);
 };
 
+
+
 const loadApplication = async (root, dir, master) => {
   impress.console.info(`Start: ${dir}`);
   const configPath = path.join(dir, 'config');
@@ -177,7 +189,18 @@ const loadApplication = async (root, dir, master) => {
   const { balancer, ports = [], workers = {} } = config.server;
   const threads = new Map();
   const pool = new Pool({ timeout: workers.wait });
-  const app = { root, path: dir, config, threads, pool, ready: 0 };
+  let sharedCache = null;
+  try {
+    sharedCache = new SharedCache({ config, dir, console: impress.console });
+    await sharedCache.initialize();
+  } catch (error) {
+    impress.console.error(`Shared cache init failed: ${error.message}`);
+    sharedCache = null;
+  }
+  const app = {
+    root, path: dir, config, threads, pool, ready: 0, sharedCache,
+  };
+  if (sharedCache) sharedCache.watch(app);
   if (balancer) await startWorker(app, 'balancer', balancer);
   for (const port of ports) await startWorker(app, 'server', port);
   const poolSize = workers.pool || 0;

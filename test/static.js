@@ -9,26 +9,38 @@ const root = process.cwd();
 
 const application = {
   path: path.join(root, 'test'),
-  watcher: { watch() {} },
   absolute(relative) {
     return path.join(this.path, relative);
   },
 };
 
-test('lib/static load - should load static files correctly', async () => {
+test('lib/static - should initialize and manage files', () => {
   const cache = new Static('lib', application);
   assert.strictEqual(cache.files instanceof Map, true);
   assert.strictEqual(cache.files.size, 0);
-  assert.strictEqual(cache.ext, undefined);
-  assert.strictEqual(cache.maxFileSize, -1);
   assert.strictEqual(cache.get('/example/add.js'), undefined);
 
-  await cache.load();
-  assert.strictEqual(cache.files.size, 13);
+  const data = Buffer.from('test content');
+  const stat = { size: data.length };
+  const filesMap = new Map([['/example/add.js', { data, stat }]]);
+  cache.setFiles(filesMap);
+  assert.strictEqual(cache.files.size, 1);
   const file = cache.get('/example/add.js');
-  assert.strictEqual(file.data instanceof Buffer, true);
-  assert.strictEqual(file.data.length, 158);
-  assert.strictEqual(cache.get('/example/unknown.js'), undefined);
-  assert.strictEqual(cache.ext, undefined);
-  assert.strictEqual(cache.maxFileSize, 10000000);
+  assert.strictEqual(file.data, data);
+  assert.strictEqual(file.stat.size, 12);
+
+  // updateFiles adds entries
+  const data2 = Buffer.from('more');
+  cache.updateFiles(new Map([['/new.js', { data: data2, stat: { size: 4 } }]]));
+  assert.strictEqual(cache.files.size, 2);
+  assert.ok(cache.get('/new.js'));
+
+  // deleteFiles removes entries
+  cache.deleteFiles(['/example/add.js']);
+  assert.strictEqual(cache.files.size, 1);
+  assert.strictEqual(cache.get('/example/add.js'), undefined);
+
+  // setFiles replaces all
+  cache.setFiles(new Map());
+  assert.strictEqual(cache.files.size, 0);
 });

@@ -81,7 +81,7 @@ const res = await metacom.api.example.citiesByCountry({ countryId: 3 });
 - **Code protection**: reference pollution prevention, prototype pollution prevention
 - **Multi-threading** for CPU utilization and execution isolation
 - **Load balancing** for simple scaling with redirection to multiple ports
-- **Caching**: in-memory caching for APIs and static files
+- **Shared static cache**: zero-copy file cache via SharedArrayBuffer shared across all worker threads ([architecture](doc/shared-cache.md))
 - **Configuration**: environment-specific application settings
 - **Database access** layer compatible with PostgreSQL with SQL-injection protection
 - **Persistent sessions** with authentication, groups, and anonymous sessions
@@ -110,7 +110,7 @@ Those features will be implemented in nearest future (3-6 months):
 
 ## License & Contributors
 
-Copyright (c) 2012-2025 Metarhia contributors.
+Copyright (c) 2012-2026 Metarhia contributors.
 See github for full [contributors list](https://github.com/metarhia/impress/graphs/contributors).
 Impress Application Server is [MIT licensed](./LICENSE).
 Project coordinator: &lt;timur.shemsedinov@gmail.com&gt;
