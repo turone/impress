@@ -107,6 +107,8 @@ SharedCache.initialize()
       cache.load(name, files) // FileCache distributes files across segments
 ```
 
+If shared cache initialization fails (configuration, filesystem, or reader error), application startup is aborted — there is no fallback to per-worker static loading in this branch. Empty placements are valid: initialization succeeds with an empty index and zero allocated segments.
+
 `load()` sorts files by descending size — large files are placed first, reducing fragmentation. For each file, `#allocateEntry()` is called:
 
 1. `size > maxFileSize` → disk entry
@@ -154,6 +156,8 @@ Disk entries are projected as `{ data: null, stat, path }` — unchanged.
 ## Hot-reload: epoch-based delta updates
 
 metawatch debounces filesystem events, collecting them into a batch during a quiet period. SharedCache uses **epoch coalescing** on top of this: all changes and deletions in a single metawatch batch are collected into one epoch, then flushed as minimal broadcasts.
+
+Routing from a filesystem event to a placement is done by the first path segment relative to application root, not by absolute-path prefix matching. This avoids collisions such as `static` vs `static2`.
 
 ```
 metawatch                        SharedCache
@@ -207,8 +211,10 @@ After entries are freed, `compact(threshold=0.3)` is called:
 1. Finds the base segment with the lowest utilization below `threshold`
 2. Requires at least 2 base segments (a single segment has nowhere to compact to)
 3. Attempts to move all files from the target segment into others (via `allocate(size, noCreate=true)`)
-4. On success — updates indexes, sends `file-update` to workers
+4. On success — updates indexes, groups moved files by placement, sends one `file-update` per affected placement, and tracks all `oldEntries` against the **last** `updateId` of the compaction batch
 5. On failure — full rollback: restores extents and tail of the target segment
+
+Compaction uses the same batch-first ACK rule as epoch flush: workers may receive several `file-update` messages from one compaction, but memory is released only after the ACK for the last message in that batch.
 
 After compaction, the emptied segment automatically enters `cleanSegmentIds` through the normal `free → retireSegment` cycle.
 

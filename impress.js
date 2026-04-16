@@ -189,18 +189,17 @@ const loadApplication = async (root, dir, master) => {
   const { balancer, ports = [], workers = {} } = config.server;
   const threads = new Map();
   const pool = new Pool({ timeout: workers.wait });
-  let sharedCache = null;
+  const sharedCache = new SharedCache({ config, dir, console: impress.console });
   try {
-    sharedCache = new SharedCache({ config, dir, console: impress.console });
     await sharedCache.initialize();
   } catch (error) {
-    impress.console.error(`Shared cache init failed: ${error.message}`);
-    sharedCache = null;
+    error.message = `Shared cache init failed: ${error.message}`;
+    throw error;
   }
   const app = {
     root, path: dir, config, threads, pool, ready: 0, sharedCache,
   };
-  if (sharedCache) sharedCache.watch(app);
+  sharedCache.watch(app);
   if (balancer) await startWorker(app, 'balancer', balancer);
   for (const port of ports) await startWorker(app, 'server', port);
   const poolSize = workers.pool || 0;

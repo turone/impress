@@ -44,3 +44,53 @@ test('lib/static - should initialize and manage files', () => {
   cache.setFiles(new Map());
   assert.strictEqual(cache.files.size, 0);
 });
+
+test('lib/static - serve uses fast exact-hit path for regular files', async () => {
+  const cache = new Static('lib', application);
+  const data = Buffer.from('exact hit');
+  cache.setFiles(new Map([['/example/add.js', { data, stat: { size: data.length } }]]));
+  cache.find = () => {
+    throw new Error('find should not be called for exact hit');
+  };
+
+  let written = null;
+  const transport = {
+    req: { headers: {} },
+    write: (...args) => {
+      written = args;
+    },
+  };
+
+  await cache.serve('/example/add.js', transport);
+  assert.ok(written);
+  assert.strictEqual(written[0], data);
+  assert.strictEqual(written[1], 200);
+  assert.strictEqual(written[2], 'js');
+});
+
+test('lib/static - serve still uses find for fallback paths', async () => {
+  const cache = new Static('lib', application);
+  const data = Buffer.from('index');
+  cache.setFiles(new Map([['/example/index.html', { data, stat: { size: data.length } }]]));
+
+  const originalFind = cache.find.bind(cache);
+  let findCalls = 0;
+  cache.find = (...args) => {
+    findCalls++;
+    return originalFind(...args);
+  };
+
+  let written = null;
+  const transport = {
+    req: { headers: {} },
+    write: (...args) => {
+      written = args;
+    },
+  };
+
+  await cache.serve('/example/', transport);
+  assert.ok(findCalls > 0);
+  assert.ok(written);
+  assert.strictEqual(written[0], data);
+  assert.strictEqual(written[1], 200);
+});

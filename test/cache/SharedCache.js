@@ -2,7 +2,11 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
+const path = require('node:path');
+const os = require('node:os');
+const { promises: fsp } = require('node:fs');
 const { SharedCache } = require('../../lib/cache/SharedCache.js');
+const { metarhia } = require('../../lib/deps.js');
 
 const createConfig = () => ({
   cache: {
@@ -12,19 +16,54 @@ const createConfig = () => ({
   server: { timeouts: { watch: 500 } },
 });
 
-const createSharedCache = () => {
+const createSharedCache = (options = {}) => {
   const logs = [];
-  const mockConsole = {
+  const mockConsole = options.console || {
     info: (...args) => logs.push(args.join(' ')),
     error: (...args) => logs.push(args.join(' ')),
   };
   const sc = new SharedCache({
-    config: createConfig(),
-    dir: process.cwd(),
+    config: options.config || createConfig(),
+    dir: options.dir || process.cwd(),
     console: mockConsole,
   });
   sc.app = { threads: new Map() };
   return { sc, logs };
+};
+
+class FakeWatcher {
+  constructor() {
+    this.handlers = {};
+  }
+
+  on(name, handler) {
+    this.handlers[name] = handler;
+  }
+
+  watch() {}
+}
+
+const withFakeWatcher = async (fn) => {
+  const DirectoryWatcher = metarhia.metawatch.DirectoryWatcher;
+  metarhia.metawatch.DirectoryWatcher = FakeWatcher;
+  try {
+    return await fn();
+  } finally {
+    metarhia.metawatch.DirectoryWatcher = DirectoryWatcher;
+  }
+};
+
+const flushAsync = async () => {
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+};
+
+const waitFor = async (predicate) => {
+  for (let i = 0; i < 20; i++) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  return predicate();
 };
 
 const makeFile = (size) => ({
@@ -231,6 +270,55 @@ test('SharedCache handleAck - compact after free broadcasts', async () => {
   assert.strictEqual(sc.pendingFrees.size, 0);
 });
 
+test('SharedCache compact - tracks old entries once for multi-placement batch', async () => {
+  const { sc } = createSharedCache();
+  const messages = [];
+  sc.app = {
+    threads: new Map([
+      [1, { postMessage: (msg) => messages.push(msg) }],
+    ]),
+  };
+  sc.nextUpdateId = 10;
+
+  const large = 30000;
+  const small = 100;
+
+  const oldStatic = await sc.cache.allocate('static', '/a.js', makeFile(large));
+  const oldResources = await sc.cache.allocate(
+    'resources',
+    '/b.js',
+    makeFile(large),
+  );
+  await sc.cache.allocate('static', '/small-a.js', makeFile(small));
+  await sc.cache.allocate('resources', '/small-b.js', makeFile(small));
+  await sc.cache.allocate('static', '/tail.js', makeFile(10000));
+
+  sc.cache.remove('static', '/a.js');
+  sc.cache.remove('resources', '/b.js');
+  sc.pendingFrees.set(1, {
+    workerIds: new Set([1]),
+    entries: [oldStatic, oldResources],
+  });
+
+  sc.handleAck(1, 1);
+
+  const updates = messages.filter((msg) => msg.name === 'file-update');
+  assert.strictEqual(updates.length, 2);
+  assert.deepStrictEqual(
+    updates.map((msg) => msg.target).sort(),
+    ['resources', 'static'],
+  );
+
+  const updateIds = updates.map((msg) => msg.updateId).sort((a, b) => a - b);
+  assert.deepStrictEqual([...sc.pendingFrees.keys()], [updateIds[1]]);
+
+  sc.handleAck(updateIds[0], 1);
+  assert.deepStrictEqual([...sc.pendingFrees.keys()], [updateIds[1]]);
+
+  sc.handleAck(updateIds[1], 1);
+  assert.strictEqual(sc.pendingFrees.size, 0);
+});
+
 // Mixed entry types (disk entries are no-op for free)
 
 test('SharedCache handleAck - disk entry free is no-op', async () => {
@@ -264,4 +352,61 @@ test('SharedCache constructor - custom placements', () => {
   assert.strictEqual(sc.placements.length, 2);
   assert.strictEqual(sc.placements[0].name, 'assets');
   assert.strictEqual(sc.placements[1].name, 'data');
+});
+
+test('SharedCache initialize - empty placements create no segments', async () => {
+  await withFakeWatcher(async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'impress-cache-empty-'));
+    try {
+      const { sc } = createSharedCache({ dir });
+      await sc.initialize();
+
+      const snapshot = sc.snapshot();
+      assert.strictEqual(snapshot.segments.length, 0);
+      assert.deepStrictEqual(Object.keys(snapshot.indexes).sort(), ['resources', 'static']);
+      assert.deepStrictEqual(snapshot.indexes.static.entries, []);
+      assert.deepStrictEqual(snapshot.indexes.resources.entries, []);
+
+      const staticDir = await fsp.stat(path.join(dir, 'static'));
+      const resourcesDir = await fsp.stat(path.join(dir, 'resources'));
+      assert.ok(staticDir.isDirectory());
+      assert.ok(resourcesDir.isDirectory());
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+test('SharedCache watch - routes overlapping placement names by path segment', async () => {
+  await withFakeWatcher(async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'impress-cache-route-'));
+    try {
+      const config = createConfig();
+      config.cache.placements = [{ name: 'static' }, { name: 'static2' }];
+      const { sc } = createSharedCache({ config, dir });
+      await sc.initialize();
+
+      sc.watch({
+        threads: new Map([
+          [1, { postMessage() {} }],
+        ]),
+      });
+
+      const filePath = path.join(dir, 'static2', 'a.txt');
+      const key = '/a.txt';
+      await fsp.writeFile(filePath, 'abc');
+
+      sc.watcher.handlers.before();
+      sc.watcher.handlers.change(filePath);
+      sc.watcher.handlers.after();
+      await flushAsync();
+      const routed = await waitFor(() => sc.cache.indexes.static2.entries.has(key));
+
+      assert.ok(routed);
+      assert.ok(sc.cache.indexes.static2.entries.has(key));
+      assert.ok(!sc.cache.indexes.static.entries.has(key));
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
 });

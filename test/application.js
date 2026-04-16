@@ -32,3 +32,10 @@ test('lib/application - should have correct application properties', () => {
   assert.strictEqual(application.auth, null);
   assert.strictEqual(application.watcher, null);
 });
+
+test('lib/application - applySharedCache requires snapshot', () => {
+  assert.throws(
+    () => application.applySharedCache(null),
+    /Shared cache snapshot is required/,
+  );
+});
