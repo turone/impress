@@ -4,6 +4,48 @@
 
 Impress uses `worker_threads` to handle HTTP requests. Each worker serves static files (HTML, CSS, JS, images, etc.). Without shared memory, every worker keeps its own copy of every file — with 8 workers and 100 MiB of static assets, total consumption reaches 800 MiB. SharedArrayBuffer stores all files in a single memory region accessible to all threads.
 
+## Benchmarks
+
+Compare before-sab -> after-sab.
+
+Delta shows improvement relative to the baseline, so positive values are better even for latency and memory metrics.
+
+| File | Metric | Before | After | Delta |
+| --- | --- | ---: | ---: | ---: |
+| bench-64k.bin | RPS | 1660.63 | 1675.67 | +0.91% |
+| bench-64k.bin | Throughput MB/s | 104.45 | 105.39 | +0.90% |
+| bench-64k.bin | p95 ms | 330.00 | 316.00 | +4.24% |
+
+| File | Metric | Before | After | Delta |
+| --- | --- | ---: | ---: | ---: |
+| bench-256k.bin | RPS | 507.00 | 507.36 | +0.07% |
+| bench-256k.bin | Throughput MB/s | 126.96 | 127.05 | +0.07% |
+| bench-256k.bin | p95 ms | 776.00 | 756.00 | +2.58% |
+
+| File | Metric | Before | After | Delta |
+| --- | --- | ---: | ---: | ---: |
+| bench-1m.bin | RPS | 127.88 | 128.59 | +0.56% |
+| bench-1m.bin | Throughput MB/s | 127.92 | 128.63 | +0.56% |
+| bench-1m.bin | p95 ms | 2057.00 | 2064.00 | -0.34% |
+
+| File | Metric | Before | After | Delta |
+| --- | --- | ---: | ---: | ---: |
+| bench-5m.bin | RPS | 80.00 | 81.56 | +1.95% |
+| bench-5m.bin | Throughput MB/s | 400.16 | 407.94 | +1.94% |
+| bench-5m.bin | p95 ms | 20182.00 | 21742.00 | -7.73% |
+
+| File | Metric | Before | After | Delta |
+| --- | --- | ---: | ---: | ---: |
+| bench-10m.bin | RPS | 66.00 | 80.41 | +21.83% |
+| bench-10m.bin | Throughput MB/s | 629.42 | 766.80 | +21.83% |
+| bench-10m.bin | p95 ms | 26430.00 | 25083.00 | +5.10% |
+
+| System metric | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| CPU max % | 22.11 | 23.18 | -4.84% |
+| Working set max MB | 5064.18 | 1161.04 | +77.07% |
+| Private max MB | 5111.51 | 1301.16 | +74.54% |
+
 ## Architecture
 
 The system is split into three modules:
