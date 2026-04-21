@@ -17,31 +17,35 @@ $ErrorActionPreference = 'Stop'
 $branch = 'CopilotInstructions'
 $remote = 'origin'
 $instructionsPath = '.github/instructions/'
+$scriptsPath = '.github/scripts/'
 $excludeFile = '.git/info/exclude'
-$excludePattern = '.github/instructions/*.instructions.md'
+$excludePatterns = @(
+    '.github/instructions/*.instructions.md',
+    '.github/scripts/'
+)
 
 # Fetch latest
 Write-Host "Fetching $remote/$branch..."
 git fetch $remote $branch
 
-# Extract instruction files into working directory
-Write-Host "Extracting instruction files..."
-git checkout "$remote/$branch" -- $instructionsPath
+# Extract instruction files and scripts into working directory
+Write-Host "Extracting instruction files and scripts..."
+git checkout "$remote/$branch" -- $instructionsPath $scriptsPath
 
 # Unstage so they stay untracked
-git reset HEAD -- $instructionsPath 2>$null
+git reset HEAD -- $instructionsPath $scriptsPath 2>$null
 
-# Ensure .git/info/exclude has the pattern
-if (Test-Path $excludeFile) {
-    $content = Get-Content $excludeFile -Raw -ErrorAction SilentlyContinue
-    if ($content -and $content -notmatch [regex]::Escape($excludePattern)) {
-        Add-Content $excludeFile "`n$excludePattern"
-        Write-Host "Added '$excludePattern' to $excludeFile"
-    }
-} else {
+# Ensure .git/info/exclude has the patterns
+if (!(Test-Path $excludeFile)) {
     New-Item -Path $excludeFile -ItemType File -Force | Out-Null
-    Set-Content $excludeFile $excludePattern
-    Write-Host "Created $excludeFile with '$excludePattern'"
+}
+$content = Get-Content $excludeFile -Raw -ErrorAction SilentlyContinue
+if (!$content) { $content = '' }
+foreach ($pattern in $excludePatterns) {
+    if ($content -notmatch [regex]::Escape($pattern)) {
+        Add-Content $excludeFile $pattern
+        Write-Host "Added '$pattern' to $excludeFile"
+    }
 }
 
 Write-Host 'Done. Instruction files are present but untracked.'

@@ -45,6 +45,8 @@ SYNCING BRANCH-SPECIFIC INSTRUCTIONS
 - Branch-specific instruction files are stored on the `CopilotInstructions` branch and synced to feature branches as untracked files.
 - They MUST NOT be committed on feature branches or included in pull requests.
 - To sync, run: `.github/scripts/sync-instructions.ps1` (PowerShell) or the equivalent shell commands.
+- First-time bootstrap (when the script is not yet present locally):
+  `git fetch origin CopilotInstructions && git checkout origin/CopilotInstructions -- .github/instructions/ .github/scripts/ && git reset HEAD -- .github/instructions/ .github/scripts/`
 
 TESTING
 
