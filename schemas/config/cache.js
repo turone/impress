@@ -9,7 +9,6 @@
       schema: {
         name: 'string',
         ext: { array: 'string', required: false },
-        compile: { type: 'boolean', required: false },
       },
     },
     required: false,

@@ -193,11 +193,10 @@ const loadApplication = async (root, dir, master) => {
   const { cache = {} } = config;
   const threads = new Map();
   const DEFAULT_PLACEMENTS = ['static', 'resources'];
-  const toPlace = ({ ext = null, compile = false }) => ({
+  const toPlace = ({ ext = null }) => ({
     domains: ['fs'],
     provider: 'sab',
     ext,
-    ...(compile && { compile }),
   });
   const places = {};
   for (const p of cache.placements || []) places[p.name] = toPlace(p);
