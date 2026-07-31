@@ -47,6 +47,27 @@ const makeStatic = () => {
   return st;
 };
 
+// Minimal kernelPlace mock — simulates Place.createReadStream from shared-memory-fs
+const makeKernelPlace = (filesMap) => ({
+  createReadStream(key, options = {}) {
+    const file = filesMap.get(key);
+    if (!file || !file.data) return null;
+    const { data } = file;
+    const start = options.start ?? 0;
+    const end = options.end ?? data.byteLength - 1;
+    const CHUNK = 65536;
+    let offset = start;
+    return new Readable({
+      read() {
+        if (offset > end) return void this.push(null);
+        const chunkEnd = Math.min(offset + CHUNK, end + 1);
+        this.push(data.subarray(offset, chunkEnd));
+        offset = chunkEnd;
+      },
+    });
+  },
+});
+
 // --- Constructor ---
 
 test('lib/static - should create Static correctly', () => {
@@ -86,7 +107,9 @@ test('lib/static serve - large file above threshold streams as Readable', async 
   st.streamThreshold = 100;
   const raw = Buffer.alloc(200, 0x41); // 200 bytes > threshold
   const file = makeSABFile(raw);
-  st.setFiles(new Map([['/big.bin', file]]));
+  const filesMap = new Map([['/big.bin', file]]);
+  st.setFiles(filesMap);
+  st.kernelPlace = makeKernelPlace(filesMap);
   const t = makeTransport();
   await st.serve('/big.bin', t);
   assert.strictEqual(t.result.code, 200);
@@ -99,7 +122,9 @@ test('lib/static serve - streamed response delivers correct bytes', async () => 
   st.streamThreshold = 100;
   const raw = Buffer.alloc(200, 0x42);
   const file = makeSABFile(raw);
-  st.setFiles(new Map([['/big.bin', file]]));
+  const filesMap = new Map([['/big.bin', file]]);
+  st.setFiles(filesMap);
+  st.kernelPlace = makeKernelPlace(filesMap);
   const t = makeTransport();
   await st.serve('/big.bin', t);
   const chunks = [];
@@ -129,7 +154,9 @@ test('lib/static serve - range request on large file returns 206 with Readable',
   st.streamThreshold = 100;
   const raw = Buffer.alloc(200, 0x43);
   const file = makeSABFile(raw);
-  st.setFiles(new Map([['/big.bin', file]]));
+  const filesMap = new Map([['/big.bin', file]]);
+  st.setFiles(filesMap);
+  st.kernelPlace = makeKernelPlace(filesMap);
   const t = makeTransport({ range: 'bytes=0-99' });
   await st.serve('/big.bin', t);
   assert.strictEqual(t.result.code, 206);

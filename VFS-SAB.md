@@ -10,11 +10,11 @@ Baseline: no SAB (per-worker file copies). Delta columns show improvement relati
 
 # Compare before-sab -> after-sab
 
-| File | Metric | Before | After | Delta |
-| --- | --- | ---: | ---: | ---: |
-| bench-64k.bin | RPS | 1767.14 | 1759.49 | -0.43% |
-| bench-64k.bin | Throughput MB/s | 111.16 | 110.67 | -0.44% |
-| bench-64k.bin | p95 ms | 330.00 | 309.00 | +6.36% |
+| File          | Metric          |  Before |   After |  Delta |
+| ------------- | --------------- | ------: | ------: | -----: |
+| bench-64k.bin | RPS             | 1767.14 | 1759.49 | -0.43% |
+| bench-64k.bin | Throughput MB/s |  111.16 |  110.67 | -0.44% |
+| bench-64k.bin | p95 ms          |  330.00 |  309.00 | +6.36% |
 
 | bench-256k.bin | RPS | 507.04 | 507.04 | +0.00% |
 | bench-256k.bin | Throughput MB/s | 126.97 | 126.97 | +0.00% |
@@ -32,25 +32,25 @@ Baseline: no SAB (per-worker file copies). Delta columns show improvement relati
 | bench-10m.bin | Throughput MB/s | 759.08 | 877.44 | +15.59% |
 | bench-10m.bin | p95 ms | 25680.00 | 22631.00 | +11.87% |
 
-| System metric | Before | After | Delta |
-| --- | ---: | ---: | ---: |
-| CPU max % | 22.91 | 23.65 | -3.23% |
+| System metric      |  Before |   After |   Delta |
+| ------------------ | ------: | ------: | ------: |
+| CPU max %          |   22.91 |   23.65 |  -3.23% |
 | Working set max MB | 5066.02 | 1210.59 | +76.10% |
-| Private max MB | 5110.43 | 1358.33 | +73.42% |
+| Private max MB     | 5110.43 | 1358.33 | +73.42% |
 
 ## Architecture
 
-The system is split into four modules behind one orchestrator:
+The cache is implemented in the external `shared-memory-fs` library. Impress imports `VFSKernel`, `VfsConfig`, and `FilesystemCache` from it:
 
-| Module | Location | Purpose |
-|--------|----------|---------|
-| **SharedCache** | `lib/cache/SharedCache.js` | Orchestration: watcher, ACK tracking, compaction dispatch, broadcast |
-| **FilesystemCache** | `lib/cache/FilesystemCache.js` | Slab allocator with pooled SAB segments, extent-based allocation, compaction |
-| **PlacementSource** | `lib/cache/PlacementSource.js` | Filesystem scanner, returns `{ stat, path }` per file |
+| Class               | Source             | Purpose                                                                      |
+| ------------------- | ------------------ | ---------------------------------------------------------------------------- |
+| **VFSKernel**       | `shared-memory-fs` | Orchestration: watcher, ACK tracking, compaction dispatch, broadcast         |
+| **FilesystemCache** | `shared-memory-fs` | Slab allocator with pooled SAB segments, extent-based allocation, compaction |
+| **VfsConfig**       | `shared-memory-fs` | Config parser and validator for places and global memory settings            |
 
-`SharedCache` owns the `FilesystemCache` instance and delegates all allocation, snapshot, projection, free, and compact operations to it.
+`VFSKernel` owns the `FilesystemCache` instance and delegates all allocation, snapshot, projection, free, and compact operations to it.
 
-`FilesystemCache` has no dependencies on Node.js built-ins. This allows it to be used in a browser or in tests without mocks.
+`FilesystemCache` has no dependencies on Node.js built-ins, which allows it to be used in tests without mocks.
 
 ## Limit mode: Slab Allocator
 
@@ -121,18 +121,22 @@ With `limitReached=true` (used by compact), step 3 is skipped � data is only m
 ### Entry types (limit mode)
 
 **Shared entry** � file in SAB:
+
 ```js
-{ kind: 'shared', segmentId, offset, length, stat }
+{
+  kind: ('shared', segmentId, offset, length, stat);
+}
 ```
+
 Zero-byte files are shared entries with `segmentId: 0, offset: 0, length: 0` � no segment is allocated.
 
 **Disk entry** � file on disk (size > maxFileSize, or budget exhausted):
+
 ```js
 { kind: 'disk', path, stat, data: null }
 ```
 
 ---
-
 
 ## File loading
 
@@ -155,7 +159,6 @@ In limit mode, `load()` sorts files by descending size � large files are place
 4. `registry.allocate(size)` > obtains `{ segmentId, offset }` � free space in a segment
 5. `reader(path, sab, offset, size)` > reads the file from disk directly into SAB, bypassing the heap; if `data` is already in memory � copies via `Uint8Array.set(data)`
 
-
 The reader is injected when SharedCache is created � it is `async (path, sab, offset, size) => void`. In Node.js it is implemented via `fh.read(Buffer.from(sab, offset, size))` � a Buffer view is created over the SharedArrayBuffer region, and `fs` writes data directly there.
 
 ### Delivery to workers
@@ -165,41 +168,43 @@ workerData.sharedCache = cache.snapshot()
 ```
 
 Limit mode snapshot:
+
 ```js
 { segments: [{ id, sab }, ...], filesystems: { placement: { entries: [...] } } }
 ```
-
 
 SharedArrayBuffer is passed via `workerData` � V8 transfers only a reference, no data copying occurs.
 
 ## Worker-side projection
 
 ```js
-const { FilesystemCache } = require('./cache/FilesystemCache.js');
+const { FilesystemCache } = require('shared-memory-fs');
 const segmentsMap = new Map();
 for (const seg of sharedCache.segments) segmentsMap.set(seg.id, seg.sab);
-const projectEntry = (entry) => FilesystemCache.projectEntry(entry, segmentsMap);
+const projectEntry = (entry) =>
+  FilesystemCache.projectEntry(entry, segmentsMap);
 ```
 
 ACK:
 
 ```js
-const sendAck = (updateId) => parentPort.postMessage({ name: 'ack-update', updateId });
+const sendAck = (updateId) =>
+  parentPort.postMessage({ name: 'ack-update', updateId });
 ```
-
 
 ### Limit mode projection
 
 Each shared entry is projected into an object with an eager Buffer view:
 
 ```js
-{ data: Buffer.from(segmentsMap.get(segmentId), offset, length), stat }
+{
+  data: (Buffer.from(segmentsMap.get(segmentId), offset, length), stat);
+}
 ```
 
 Zero-byte entries (`length === 0`) are projected as `{ data: Buffer.alloc(0), stat }` without consulting `segmentsMap`. `free()` also skips zero-byte entries � they hold no segment allocation.
 
 `Buffer.from(sab, offset, length)` creates a lightweight view (~64 bytes descriptor) over the SAB region � no data copy. The view is created once at projection time. Since segments are never freed (slab retention), SAB references in `segmentsMap` live for the entire process lifetime. When a file is removed via `deleteFiles`, the projected object loses its last reference and is GC'd along with the Buffer view. Stale data in the segment is overwritten upon reuse.
-
 
 ### Common
 
@@ -298,10 +303,12 @@ Segment 2: [fileC][fileD][fileA][fileB][_]  utilization 80%
 - **`virtualFS`** � enables recursive virtual filesystem resolution. Default: `false`.
 
 When `virtualFS` is **off** (default):
+
 - `search` = `lookup()` � exact match + `index.html` for directory paths
 - `errorPage` � generates a minimal HTML page (`<h1>404 Not Found</h1>`)
 
 When `virtualFS` is **on**:
+
 - `search` = `find()` � walks up the directory tree looking for `index.html`, `.virtual.html`, `.{code}.html`
 - `errorPage` � searches for custom error pages (`.404.html`, `.416.html`) in the file tree
 
@@ -334,6 +341,7 @@ When a cached file exceeds `streamThreshold`, it is sent via `createSABStream()`
 ### Range requests
 
 Supported in the exact-hit and disk fallback paths:
+
 - Valid range > 206 Partial Content (stream or subarray depending on size vs threshold)
 - Invalid range (`start >= end`, `start >= size`, `end >= size`) > 416 Range Not Satisfiable
 
@@ -348,9 +356,9 @@ Files with `data: null` (oversized or budget-exhausted) are served from disk via
 ```js
 // config/cache.js
 ({
-  maxFileSize: '10 mb',        // files larger than this > disk entry
-  streamThreshold: '1 mb',    // files larger than this > streamed in chunks (default '1 mb')
-  virtualFS: false,            // enable recursive virtual FS resolution (default false)
+  maxFileSize: '10 mb', // files larger than this > disk entry
+  streamThreshold: '1 mb', // files larger than this > streamed in chunks (default '1 mb')
+  virtualFS: false, // enable recursive virtual FS resolution (default false)
   placements: [
     { name: 'static' },
     { name: 'resources' },
@@ -358,7 +366,7 @@ Files with `data: null` (oversized or budget-exhausted) are served from disk via
   ],
   // Limit mode (slab allocator options):
   sab: {
-    limit: '1 gib',           // total SAB budget (must be divisible by segment size)
+    limit: '1 gib', // total SAB budget (must be divisible by segment size)
     baseSegmentSize: '64 mib', // single segment size (must be ? maxFileSize)
   },
 });
@@ -373,10 +381,12 @@ The entire `cache` section is optional � when absent, all defaults apply (`mod
 ## Safety invariants
 
 **Common (both modes):**
+
 - Workers **never write** to SharedArrayBuffer
 - All worker Buffer views are zero-copy descriptors over shared memory
 
 **Limit mode:**
+
 - Old memory is freed **only after ACK** from all workers or worker exit
 - SAB references in worker `segmentsMap` live for the entire process lifetime (slab retention)
 - All worker Buffer views reference SABs from a **single** `segmentsMap` (not a copy)
@@ -429,41 +439,43 @@ The cache design draws on several well-known systems patterns:
 
 ## Integration Guide
 
-The cache module (`lib/cache/`) is self-contained: it depends only on `metawatch` and `metautil` from the Metarhia ecosystem and has no knowledge of the application framework structure or worker lifecycle.
+The cache is implemented in the `shared-memory-fs` package, which depends on `metawatch` and `metautil` from the Metarhia ecosystem and has no knowledge of the application framework structure or worker lifecycle.
 
 ### Install dependencies
 
 ```sh
-npm install metawatch metautil
+npm install shared-memory-fs
 ```
 
-### Create and initialize SharedCache
+### Create and initialize VFSKernel
 
 ```js
-const { SharedCache } = require('./lib/cache/SharedCache.js');
+const { VFSKernel, VfsConfig } = require('shared-memory-fs');
 const { Worker } = require('node:worker_threads');
 
 // threads Map must be created before SharedCache so the closures capture it
 const threads = new Map();
 
-const cache = new SharedCache({
-  // SAB budget — all optional, defaults shown
-  limit: '1 gib',
-  baseSegmentSize: '64 mib',
-  maxFileSize: '10 mb',
+const vfsConfig = new VfsConfig({
+  defaults: {
+    memory: {
+      limit: '1 gib',
+      segmentSize: '64 mib',
+      maxFileSize: '10 mb',
+    },
+    watchTimeout: 2000,
+    hooks: { fs: false, require: false, import: false },
+  },
+  places: {
+    static: { domains: ['fs'], provider: 'sab' },
+    resources: { domains: ['fs'], provider: 'sab' },
+    assets: { domains: ['fs'], provider: 'sab', ext: ['png', 'jpg', 'woff2'] },
+  },
+});
 
-  // DirectoryWatcher debounce timeout, ms — optional
-  watchTimeout: 2000,
-
-  // Directories to serve under `dir` — optional, default: static + resources
-  placements: [
-    { name: 'static' },
-    { name: 'resources' },
-    { name: 'assets', ext: ['.png', '.jpg', '.woff2'] },
-  ],
-
+const cache = new VFSKernel(vfsConfig, {
   // Application root directory (placements live here)
-  dir: '/path/to/app',
+  appRoot: '/path/to/app',
 
   // Console-compatible logger
   console,
@@ -478,7 +490,7 @@ const cache = new SharedCache({
 });
 
 await cache.initialize(); // scan placements, load files into SAB
-cache.watch();            // start filesystem watcher
+cache.watch(); // start filesystem watcher
 ```
 
 ### Deliver snapshot to a new worker
@@ -507,7 +519,7 @@ worker.on('exit', () => {
 
 ```js
 const { workerData, parentPort } = require('node:worker_threads');
-const { FilesystemCache } = require('./cache/FilesystemCache.js');
+const { FilesystemCache } = require('shared-memory-fs');
 
 const { sharedCache } = workerData;
 
@@ -516,7 +528,10 @@ const segmentsMap = new Map();
 for (const seg of sharedCache.segments) segmentsMap.set(seg.id, seg.sab);
 
 // Project a placement into a files Map (key -> { data: Buffer|null, stat, path? })
-const files = FilesystemCache.project(sharedCache.filesystems['static'], segmentsMap);
+const files = FilesystemCache.project(
+  sharedCache.filesystems['static'],
+  segmentsMap,
+);
 
 // Send ACK after applying each update
 const sendAck = (updateId) =>
@@ -540,11 +555,11 @@ parentPort.on('message', (msg) => {
 
 ### Message protocol reference
 
-| Message (main → worker) | Fields | Notes |
-|---|---|---|
-| `file-update` | `target`, `updateId`, `updates: [[key, entry], ...]`, `newSegments: [{id, sab}]` | Apply entries then ACK |
-| `file-delete` | `target`, `updateId`, `keys: [string]` | Delete keys then ACK |
+| Message (main → worker) | Fields                                                                           | Notes                  |
+| ----------------------- | -------------------------------------------------------------------------------- | ---------------------- |
+| `file-update`           | `target`, `updateId`, `updates: [[key, entry], ...]`, `newSegments: [{id, sab}]` | Apply entries then ACK |
+| `file-delete`           | `target`, `updateId`, `keys: [string]`                                           | Delete keys then ACK   |
 
-| Message (worker → main) | Fields | Notes |
-|---|---|---|
-| `ack-update` | `updateId` | Sent after applying any message with `updateId` |
+| Message (worker → main) | Fields     | Notes                                           |
+| ----------------------- | ---------- | ----------------------------------------------- |
+| `ack-update`            | `updateId` | Sent after applying any message with `updateId` |

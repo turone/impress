@@ -11,7 +11,7 @@ const { Pool, isError } = require('metautil');
 const { loadSchema } = require('metaschema');
 const { Logger } = require('metalog');
 const { Planner } = require('./lib/planner.js');
-const { SharedCache } = require('./lib/cache/SharedCache.js');
+const { VFSKernel, VfsConfig } = require('shared-memory-fs');
 
 const CONFIG_SECTIONS = ['log', 'scale', 'server', 'sessions'];
 const PATH = process.cwd();
@@ -68,6 +68,7 @@ const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
     path: app.path,
     port,
     sharedCache,
+    vfsConfig: app.workerVfsConfig,
   };
   const execArgv = [...process.execArgv, `--test-reporter=${REPORTER_PATH}`];
   const options = { trackUnmanagedFds: true, workerData, execArgv };
@@ -191,28 +192,49 @@ const loadApplication = async (root, dir, master) => {
   const { balancer, ports = [], workers = {} } = config.server;
   const { cache = {} } = config;
   const threads = new Map();
-  const cacheOptions = {
-    limit: cache.sab?.limit,
-    baseSegmentSize: cache.sab?.baseSegmentSize,
-    maxFileSize: cache.maxFileSize,
-    watchTimeout: config.server.timeouts.watch,
-    placements: cache.placements,
-    dir,
+  const DEFAULT_PLACEMENTS = ['static', 'resources'];
+  const toPlace = ({ ext = null, compile = false }) => ({
+    domains: ['fs'],
+    provider: 'sab',
+    ext,
+    ...(compile && { compile }),
+  });
+  const places = {};
+  for (const p of cache.placements || []) places[p.name] = toPlace(p);
+  for (const name of DEFAULT_PLACEMENTS) {
+    if (!places[name]) places[name] = toPlace({});
+  }
+  const vfsMemory = {
+    ...(cache.sab?.limit && { limit: cache.sab.limit }),
+    ...(cache.sab?.baseSegmentSize && {
+      segmentSize: cache.sab.baseSegmentSize,
+    }),
+    ...(cache.maxFileSize && { maxFileSize: cache.maxFileSize }),
+  };
+  const vfsConfig = new VfsConfig({
+    defaults: {
+      memory: vfsMemory,
+      hooks: { fs: false, require: false, import: false },
+      watchTimeout: config.server.timeouts.watch,
+    },
+    places,
+  });
+  const sharedCache = new VFSKernel(vfsConfig, {
+    appRoot: dir,
     console: impress.console,
     broadcast: (data) => {
       for (const thread of threads.values()) thread.postMessage(data);
     },
     getWorkerIds: () => threads.keys(),
-  };
-  const sharedCache = new SharedCache(cacheOptions);
+  });
   try {
     await sharedCache.initialize();
   } catch (error) {
-    error.message = `Shared cache init failed: ${error.message}`;
+    error.message = `VFS init failed: ${error.message}`;
     throw error;
   }
-
   const pool = new Pool({ timeout: workers.wait });
+  const workerVfsConfig = { defaults: { memory: vfsMemory }, places };
   const app = {
     root,
     path: dir,
@@ -221,6 +243,7 @@ const loadApplication = async (root, dir, master) => {
     pool,
     ready: 0,
     sharedCache,
+    workerVfsConfig,
   };
   sharedCache.watch();
   if (balancer) await startWorker(app, 'balancer', balancer);
